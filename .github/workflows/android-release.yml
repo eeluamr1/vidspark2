@@ -7,16 +7,11 @@ jobs:
   build-apk:
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        shell: bash
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # مفيش cache هنا عشان كان بيعمل Error بسبب عدم وجود lock file
-      - name: Setup Node 18
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "18"
@@ -30,94 +25,30 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      # لو مشروعك جوه فولدر اسمه frontend هيشتغل عليه، غير كده هيشتغل على الروت
-      - name: Detect app directory (frontend or root)
-        id: appdir
-        run: |
-          if [ -f "frontend/package.json" ]; then
-            echo "dir=frontend" >> "$GITHUB_OUTPUT"
-          else
-            echo "dir=." >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Install deps + build web
-        working-directory: ${{ steps.appdir.outputs.dir }}
+      - name: Install deps + build web (ROOT)
+        shell: bash
         run: |
           set -e
+          npm install
 
-          # install
-          if [ -f "package-lock.json" ]; then
-            npm ci
-          else
-            npm install
-          fi
-
-          # Optional: set API base from GitHub Secrets (VITE_API_BASE)
-          if [ -n "${{ secrets.VITE_API_BASE }}" ]; then
-            echo "VITE_API_BASE=${{ secrets.VITE_API_BASE }}" > .env
-          else
-            echo "VITE_API_BASE=http://127.0.0.1:4000" > .env
-          fi
-
-          # build (لو مفيش build script هيجرب vite مباشرة)
-          if npm run | grep -q " build"; then
+          # لو فيه build script شغّله، غير كده جرّب vite build
+          if npm run | grep -qE ' build'; then
             npm run build
-          else
-            echo "No 'build' script found; trying: npx vite build"
+          elif [ -f "vite.config.js" ] || [ -f "vite.config.ts" ]; then
             npx vite build
+          else
+            echo "No build script found and no Vite config. Skipping web build."
           fi
 
-      - name: Add Android platform + sync Capacitor
-        working-directory: ${{ steps.appdir.outputs.dir }}
+      - name: Add Android platform + sync Capacitor (ROOT)
+        shell: bash
         run: |
           set -e
-          if [ ! -d "android" ]; then
-            npx cap add android
-          fi
+          npx cap add android || true
           npx cap sync android
 
-      - name: Allow HTTP (cleartext) for local API
-        working-directory: ${{ steps.appdir.outputs.dir }}
-        run: |
-          set -e
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          p = Path("android/app/src/main/AndroidManifest.xml")
-          if not p.exists():
-            raise SystemExit(f"Manifest not found: {p}")
-
-          t = p.read_text(encoding="utf-8")
-
-          # Add INTERNET permission if missing (helpful)
-          if "android.permission.INTERNET" not in t:
-            t = re.sub(
-              r'(<manifest[^>]*>)',
-              r'\1\n    <uses-permission android:name="android.permission.INTERNET" />',
-              t,
-              count=1
-            )
-
-          # Ensure usesCleartextTraffic="true" in <application>
-          def repl(m):
-            tag = m.group(0)
-            if "android:usesCleartextTraffic" in tag:
-              return re.sub(
-                r'android:usesCleartextTraffic="[^"]*"',
-                'android:usesCleartextTraffic="true"',
-                tag
-              )
-            return tag[:-1] + ' android:usesCleartextTraffic="true">'
-
-          t, _ = re.subn(r"<application\b[^>]*>", repl, t, count=1)
-
-          p.write_text(t, encoding="utf-8")
-          print("Updated AndroidManifest.xml")
-          PY
-
       - name: Build DEBUG APK (installable)
-        working-directory: ${{ steps.appdir.outputs.dir }}
+        shell: bash
         run: |
           set -e
           cd android
@@ -128,5 +59,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
-          path: ${{ steps.appdir.outputs.dir }}/android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
+          path: android/app/build/outputs/apk/debug/app-debug.apk
