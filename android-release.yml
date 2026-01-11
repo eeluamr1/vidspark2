@@ -1,0 +1,76 @@
+name: Build APK (Phone-only installable)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install deps + build web
+        working-directory: frontend
+        run: |
+          npm ci
+          # الافتراضي: الـ API على نفس الموبايل عبر Termux
+          # تقدر تغيّرها من Secrets باسم VITE_API_BASE
+          if [ -n "${{ secrets.VITE_API_BASE }}" ]; then
+            echo "VITE_API_BASE=${{ secrets.VITE_API_BASE }}" > .env
+          else
+            echo "VITE_API_BASE=http://127.0.0.1:4000" > .env
+          fi
+          npm run build
+
+      - name: Add Android platform + sync Capacitor
+        working-directory: frontend
+        run: |
+          npx cap add android || true
+          npx cap sync android
+
+      - name: Allow HTTP (cleartext) for local API
+        run: |
+          python - << 'PY'
+          from pathlib import Path
+          p = Path("frontend/android/app/src/main/AndroidManifest.xml")
+          t = p.read_text(encoding="utf-8")
+          if 'android:usesCleartextTraffic=' not in t:
+              # add attribute into <application ... >
+              import re
+              def repl(m):
+                  tag = m.group(0)
+                  if tag.endswith(">"):
+                      tag = tag[:-1] + ' android:usesCleartextTraffic="true">'
+                  else:
+                      tag = tag + ' android:usesCleartextTraffic="true"'
+                  return tag
+              t2 = re.sub(r"<application\b[^>]*>", repl, t, count=1)
+              p.write_text(t2, encoding="utf-8")
+          PY
+
+      - name: Build DEBUG APK (installable)
+        working-directory: frontend/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VidSpark-app-debug-apk
+          path: frontend/android/app/build/outputs/apk/debug/*.apk
