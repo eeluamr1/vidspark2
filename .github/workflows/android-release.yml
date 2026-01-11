@@ -25,26 +25,32 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install deps + build web (ROOT)
+      - name: Install deps
         shell: bash
         run: |
           set -e
           npm install
 
-          # لو فيه build script شغّله، غير كده جرّب vite build
-          if npm run | grep -qE ' build'; then
-            npm run build
-          elif [ -f "vite.config.js" ] || [ -f "vite.config.ts" ]; then
-            npx vite build
-          else
-            echo "No build script found and no Vite config. Skipping web build."
-          fi
-
-      - name: Add Android platform + sync Capacitor (ROOT)
+      - name: Ensure Vite installed (fix ERR_MODULE_NOT_FOUND)
         shell: bash
         run: |
           set -e
-          npx cap add android || true
+          node -e "require.resolve('vite')" >/dev/null 2>&1 || npm i -D vite
+
+      - name: Build web (Vite)
+        shell: bash
+        run: |
+          set -e
+          # لو عندك build script هيشتغل، لو مش موجود هيشغل vite build مباشرة
+          npm run build --if-present || npx vite build
+
+      - name: Add Android platform (if missing) + Sync Capacitor
+        shell: bash
+        run: |
+          set -e
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
           npx cap sync android
 
       - name: Build DEBUG APK (installable)
