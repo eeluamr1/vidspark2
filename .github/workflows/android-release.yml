@@ -1,443 +1,77 @@
-import streamlit as st
-import os
-import tempfile
-from PIL import Image, ImageDraw, ImageFont
-import cv2
-import numpy as np
-from moviepy.editor import *
-from gtts import gTTS
-import base64
-from io import BytesIO
-import time
+name: Build APK (Phone-only installable)
 
-# ========== إعدادات الموقع ==========
-st.set_page_config(
-    page_title="مولد الفيديوهات المجاني",
-    page_icon="🎬",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+on:
+  workflow_dispatch:
 
-# ========== CSS مخصص ==========
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 3rem;
-        color: #FF6B6B;
-        text-align: center;
-        margin-bottom: 2rem;
-        font-weight: bold;
-    }
-    .feature-card {
-        padding: 1.5rem;
-        border-radius: 10px;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        margin: 1rem 0;
-    }
-    .stButton>button {
-        width: 100%;
-        padding: 1rem;
-        font-size: 1.2rem;
-        border-radius: 10px;
-        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-        color: white;
-        border: none;
-    }
-    .stDownloadButton>button {
-        background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-    }
-    .footer {
-        text-align: center;
-        margin-top: 3rem;
-        padding: 1rem;
-        color: #666;
-        border-top: 1px solid #ddd;
-    }
-</style>
-""", unsafe_allow_html=True)
+permissions:
+  contents: write
 
-# ========== الدوال المساعدة ==========
-def get_image_download_link(img, filename, text):
-    """إنشاء رابط تحميل للصورة"""
-    buffered = BytesIO()
-    img.save(buffered, format="PNG")
-    img_str = base64.b64encode(buffered.getvalue()).decode()
-    href = f'<a href="data:image/png;base64,{img_str}" download="{filename}">{text}</a>'
-    return href
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
 
-def create_simple_video_from_images(images, output_path="output.mp4"):
-    """إنشاء فيديو بسيط من الصور"""
-    if not images:
-        return None
-    
-    # تغيير حجم الصور
-    resized_images = []
-    for img in images:
-        img = img.resize((640, 480))
-        resized_images.append(img)
-    
-    # حفظ الصور مؤقتاً
-    temp_files = []
-    for i, img in enumerate(resized_images):
-        temp_path = f"temp_{i}.jpg"
-        img.save(temp_path)
-        temp_files.append(temp_path)
-    
-    # إنشاء الفيديو
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_path, fourcc, 1.0, (640, 480))
-    
-    for temp_file in temp_files:
-        img = cv2.imread(temp_file)
-        out.write(img)
-    
-    out.release()
-    
-    # تنظيف الملفات المؤقتة
-    for temp_file in temp_files:
-        os.remove(temp_file)
-    
-    return output_path
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-def text_to_speech(text, lang='ar'):
-    """تحويل النص إلى كلام"""
-    tts = gTTS(text=text, lang=lang, slow=False)
-    audio_path = "output_audio.mp3"
-    tts.save(audio_path)
-    return audio_path
+      - name: Setup Node 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
 
-# ========== واجهة المستخدم ==========
-st.markdown('<h1 class="main-header">🎬 مولد الفيديوهات المجاني</h1>', unsafe_allow_html=True)
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
 
-# شريط التنقل
-menu = ["🏠 الرئيسية", "🖼️ صور إلى فيديو", "📝 نص إلى فيديو", "🎵 أضف موسيقى", "💾 تحميلاتي"]
-choice = st.sidebar.radio("القائمة", menu)
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
-st.sidebar.markdown("---")
-st.sidebar.info("""
-### ⚡ ميزات الموقع:
-- تحويل الصور إلى فيديو مجاناً
-- تحويل النص إلى فيديو مع صوت
-- إضافة موسيقى خلفية
-- لا حاجة للتسجيل
-- يدعم اللغة العربية
-""")
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -e
+          npm ci || npm install
 
-# الصفحة الرئيسية
-if choice == "🏠 الرئيسية":
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown('<div class="feature-card">', unsafe_allow_html=True)
-        st.markdown("### 🖼️ تحويل الصور إلى فيديو")
-        st.markdown("ارفع عدة صور واحصل على فيديو متحرك")
-        st.markdown("""
-        - دعم جميع صيغ الصور
-        - إضافة انتقالات تلقائية
-        - اختيار مدة العرض
-        """)
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        st.markdown('<div class="feature-card">', unsafe_allow_html=True)
-        st.markdown("### 🎵 إضافة موسيقى")
-        st.markdown("أضف موسيقى خلفية لفيديوهاتك")
-        st.markdown("""
-        - رفع ملفات MP3
-        - ضبط مستوى الصوت
-        - مزج الصوت التلقائي
-        """)
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown('<div class="feature-card">', unsafe_allow_html=True)
-        st.markdown("### 📝 النص إلى فيديو")
-        st.markdown("حول النصوص إلى فيديو مع صوت")
-        st.markdown("""
-        - دعم اللغة العربية
-        - اختيار صوت ذكوري/أنثوي
-        - إضافة خلفيات متحركة
-        """)
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        st.markdown('<div class="feature-card">', unsafe_allow_html=True)
-        st.markdown("### ⚡ سريع وسهل")
-        st.markdown("لا حاجة لخبرة تقنية")
-        st.markdown("""
-        - واجهة عربية بسيطة
-        - نتائج فورية
-        - تحميل مباشر
-        """)
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.markdown("---")
-    
-    # مثال سريع
-    st.subheader("🚀 جرب الآن!")
-    quick_option = st.selectbox("اختر ميزة سريعة:", 
-                               ["", "تحويل 3 صور إلى فيديو", "تحويل نص عربي إلى صوت"])
-    
-    if quick_option == "تحويل 3 صور إلى فيديو":
-        uploaded_files = st.file_uploader(
-            "اختر 3 صور", 
-            type=['png', 'jpg', 'jpeg'],
-            accept_multiple_files=True,
-            key="quick_imgs"
-        )
-        
-        if uploaded_files and len(uploaded_files) == 3:
-            if st.button("🎬 أنشئ فيديو سريع"):
-                images = [Image.open(file) for file in uploaded_files]
-                with st.spinner("جاري إنشاء الفيديو..."):
-                    video_path = create_simple_video_from_images(images)
-                    
-                    if video_path and os.path.exists(video_path):
-                        st.success("✅ تم إنشاء الفيديو!")
-                        st.video(video_path)
-                        
-                        with open(video_path, "rb") as file:
-                            st.download_button(
-                                label="📥 تحميل الفيديو",
-                                data=file,
-                                file_name="فيديوي_السريع.mp4",
-                                mime="video/mp4"
-                            )
+      - name: Ensure Vite exists (fix Cannot find package 'vite')
+        shell: bash
+        run: |
+          set -e
+          npm ls vite >/dev/null 2>&1 || npm i -D vite
 
-# تحويل الصور إلى فيديو
-elif choice == "🖼️ صور إلى فيديو":
-    st.header("🖼️ تحويل الصور إلى فيديو")
-    
-    # رفع الصور
-    uploaded_files = st.file_uploader(
-        "اختر الصور (يمكنك اختيار أكثر من صورة)",
-        type=['png', 'jpg', 'jpeg', 'bmp', 'gif'],
-        accept_multiple_files=True
-    )
-    
-    if uploaded_files:
-        st.success(f"✅ تم رفع {len(uploaded_files)} صورة")
-        
-        # عرض الصور المصغرة
-        cols = st.columns(4)
-        for idx, uploaded_file in enumerate(uploaded_files):
-            with cols[idx % 4]:
-                image = Image.open(uploaded_file)
-                st.image(image, caption=f"صورة {idx+1}", use_column_width=True)
-    
-    # إعدادات
-    with st.expander("⚙️ إعدادات الفيديو", expanded=True):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            fps = st.slider("معدل الإطارات", 1, 30, 10)
-            duration = st.slider("مدة كل صورة (ثانية)", 1, 10, 3)
-        
-        with col2:
-            quality = st.selectbox("جودة الفيديو", ["منخفضة (480p)", "متوسطة (720p)", "عالية (1080p)"])
-            add_transition = st.checkbox("إضافة تأثيرات انتقال", value=True)
-    
-    # زر الإنشاء
-    if uploaded_files and st.button("🎬 أنشئ الفيديو الآن", use_container_width=True):
-        with st.spinner("جاري معالجة الصور وإنشاء الفيديو..."):
-            # محاكاة العملية
-            progress_bar = st.progress(0)
-            
-            for i in range(100):
-                time.sleep(0.02)
-                progress_bar.progress(i + 1)
-            
-            # في التطبيق الحقيقي، هنا سيتم إنشاء الفيديو
-            st.success("🎉 تم إنشاء الفيديو بنجاح!")
-            
-            # عرض فيديو تجريبي
-            st.video("https://sample-videos.com/video123/mp4/480/big_buck_bunny_480p_1mb.mp4")
-            
-            # زر تحميل وهمي
-            st.download_button(
-                label="📥 تحميل الفيديو (10MB)",
-                data=b"",
-                file_name="فيديو_الصور.mp4",
-                mime="video/mp4",
-                disabled=True
-            )
-            
-            st.info("💡 في النسخة الكاملة، سيتم إنشاء الفيديو من صورك الحقيقية")
+      - name: Build Web (Vite)
+        shell: bash
+        run: |
+          set -e
+          node -e "process.exit(require('./package.json')?.scripts?.build ? 0 : 1)" \
+            && npm run build \
+            || npx vite build
 
-# تحويل النص إلى فيديو
-elif choice == "📝 نص إلى فيديو":
-    st.header("📝 تحويل النص إلى فيديو")
-    
-    # إدخال النص
-    text = st.text_area(
-        "اكتب النص هنا:",
-        height=150,
-        placeholder="اكتب النص الذي تريد تحويله إلى فيديو...",
-        help="يمكنك كتابة أي نص بالعربية أو الإنجليزية"
-    )
-    
-    # خيارات
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        language = st.selectbox("اللغة", ["العربية", "الإنجليزية", "الفرنسية"])
-        voice_type = st.radio("نوع الصوت", ["ذكوري", "أنثوي"])
-    
-    with col2:
-        bg_color = st.color_picker("لون الخلفية", "#000000")
-        text_color = st.color_picker("لون النص", "#FFFFFF")
-    
-    with col3:
-        duration = st.slider("مدة الفيديو (ثواني)", 5, 120, 30)
-        font_size = st.slider("حجم الخط", 20, 100, 48)
-    
-    # معاينة النص
-    if text:
-        st.subheader("👁️ معاينة النص")
-        preview_html = f"""
-        <div style="
-            background-color: {bg_color};
-            color: {text_color};
-            padding: 2rem;
-            border-radius: 10px;
-            font-size: {font_size}px;
-            text-align: center;
-            margin: 1rem 0;
-            min-height: 200px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        ">
-            {text[:100]}{'...' if len(text) > 100 else ''}
-        </div>
-        """
-        st.markdown(preview_html, unsafe_allow_html=True)
-    
-    # زر الإنشاء
-    if text and st.button("🎬 أنشئ فيديو من النص", use_container_width=True):
-        with st.spinner("جاري تحويل النص إلى صوت وإنشاء الفيديو..."):
-            # توليد صوت
-            try:
-                audio_path = text_to_speech(text[:500], 'ar')
-                st.audio(audio_path)
-            except:
-                st.warning("تعذر توليد الصوت، لكن الفيديو سيحتوي على النص المرئي")
-            
-            # محاكاة تقدم العمل
-            progress_bar = st.progress(0)
-            
-            for i in range(100):
-                time.sleep(0.03)
-                progress_bar.progress(i + 1)
-            
-            st.success("✅ تم إنشاء الفيديو!")
-            
-            # عرض فيديو تجريبي
-            st.video("https://sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4")
-            
-            # أزرار التحميل
-            col1, col2 = st.columns(2)
-            with col1:
-                st.download_button(
-                    label="📥 تحميل الفيديو",
-                    data=b"",
-                    file_name="فيديو_النص.mp4",
-                    mime="video/mp4",
-                    disabled=True
-                )
-            with col2:
-                st.download_button(
-                    label="🎵 تحميل الصوت فقط",
-                    data=b"",
-                    file_name="صوت_النص.mp3",
-                    mime="audio/mpeg",
-                    disabled=True
-                )
+      - name: Add Android platform + Sync Capacitor
+        shell: bash
+        run: |
+          set -e
+          npx cap add android || true
+          npx cap sync android
 
-# إضافة موسيقى
-elif choice == "🎵 أضف موسيقى":
-    st.header("🎵 إضافة موسيقى إلى الفيديو")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("رفع الفيديو")
-        video_file = st.file_uploader("اختر ملف فيديو", type=['mp4', 'mov', 'avi'])
-        
-        if video_file:
-            st.video(video_file)
-    
-    with col2:
-        st.subheader("رفع الموسيقى")
-        audio_file = st.file_uploader("اختر ملف صوتي", type=['mp3', 'wav', 'ogg'])
-        
-        if audio_file:
-            st.audio(audio_file)
-    
-    if video_file and audio_file:
-        st.subheader("⚙️ إعدادات المزج")
-        
-        volume = st.slider("مستوى صوت الموسيقى %", 0, 100, 50)
-        fade_in = st.checkbox("تدريج الصوت عند البداية")
-        fade_out = st.checkbox("تدريج الصوت عند النهاية")
-        
-        if st.button("🎵 دمج الموسيقى مع الفيديو", use_container_width=True):
-            with st.spinner("جاري دمج الموسيقى مع الفيديو..."):
-                progress_bar = st.progress(0)
-                
-                for i in range(100):
-                    time.sleep(0.02)
-                    progress_bar.progress(i + 1)
-                
-                st.success("✅ تم دمج الموسيقى بنجاح!")
-                st.balloons()
-                
-                # فيديو تجريبي
-                st.video("https://sample-videos.com/video123/mp4/480/big_buck_bunny_480p_1mb.mp4")
-                
-                st.download_button(
-                    label="📥 تحميل الفيديو مع الموسيقى",
-                    data=b"",
-                    file_name="فيديو_مع_موسيقى.mp4",
-                    mime="video/mp4",
-                    disabled=True
-                )
+      - name: Build DEBUG APK
+        shell: bash
+        run: |
+          set -e
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
 
-# صفحة التحميلات
-else:
-    st.header("💾 التحميلات السابقة")
-    
-    st.info("""
-    **ملاحظة:** في النسخة المجانية، يتم حذف الملفات بعد 24 ساعة.
-    للتخزين الدائم، يرجى ترقية حسابك.
-    """)
-    
-    # قائمة وهمية للتحميلات
-    downloads = [
-        {"name": "فيديو العائلة.mp4", "date": "2024-01-15", "size": "24.5 MB"},
-        {"name": "عرض تقديمي.mp4", "date": "2024-01-14", "size": "15.2 MB"},
-        {"name": "تهنئة عيد الميلاد.mp4", "date": "2024-01-13", "size": "8.7 MB"},
-    ]
-    
-    for item in downloads:
-        with st.expander(f"📹 {item['name']} - {item['date']} ({item['size']})"):
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.video("https://sample-videos.com/video123/mp4/240/big_buck_bunny_240p_1mb.mp4")
-            with col2:
-                st.download_button(
-                    label="تحميل مجدداً",
-                    data=b"",
-                    file_name=item['name'],
-                    mime="video/mp4",
-                    disabled=True
-                )
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
 
-# ========== التذييل ==========
-st.markdown("---")
-st.markdown("""
-<div class="footer">
-    <p>🎬 <strong>مولد الفيديوهات المجاني</strong> - أداة مجانية لإنشاء الفيديوهات مباشرة من المتصفح</p>
-    <p>📧 للدعم: support@videogenerator.com | 📱 متوافق مع جميع الأجهزة</p>
-    <p>© 2024 جميع الحقوق محفوظة | النسخة 1.0</p>
-</div>
-""", unsafe_allow_html=True)
+      - name: Create GitHub Release + attach APK (Direct download link)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.run_number }}
+          name: APK Build ${{ github.run_number }}
+          files: android/app/build/outputs/apk/debug/app-debug.apk
