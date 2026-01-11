@@ -14,6 +14,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Detect project directory (root or frontend)
+        id: dir
+        shell: bash
+        run: |
+          if [ -f "frontend/package.json" ]; then
+            echo "dir=frontend" >> "$GITHUB_OUTPUT"
+          else
+            echo "dir=." >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup Node 18
         uses: actions/setup-node@v4
         with:
@@ -28,69 +38,73 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install deps (works with or without lockfile)
+      # تثبيت dependencies (بدون npm ci عشان مايفشلش لو مفيش lockfile)
+      - name: Install dependencies
+        working-directory: ${{ steps.dir.outputs.dir }}
         shell: bash
         run: |
           set -e
-          if [ -f package-lock.json ]; then
-            npm ci
+          npm install
+
+      # لو مشروعك فيه vite.config بس vite مش متثبت -> يثبت vite تلقائيًا (وده اللي كان مسبب ERR_MODULE_NOT_FOUND)
+      - name: Ensure Vite exists if config present
+        working-directory: ${{ steps.dir.outputs.dir }}
+        shell: bash
+        run: |
+          set -e
+          if ls vite.config.* >/dev/null 2>&1; then
+            npm ls vite >/dev/null 2>&1 || npm i -D vite
+          fi
+
+      # Build web assets:
+      # 1) لو عندك script اسمه build -> يشغله
+      # 2) لو مفيش build script بس فيه vite.config -> يشغل npx vite build
+      # 3) غير كده -> يكمل (عشان على الأقل يطلع APK حتى لو الويب مش متجهز)
+      - name: Build web (safe)
+        working-directory: ${{ steps.dir.outputs.dir }}
+        shell: bash
+        run: |
+          set -e
+          if npm run | grep -qE '(^|[[:space:]])build($|[[:space:]])'; then
+            npm run build
+          elif ls vite.config.* >/dev/null 2>&1; then
+            npx vite build
           else
-            npm install
+            echo "No build script and no vite.config.* found -> skipping web build."
           fi
 
-      - name: Ensure Vite exists (fix: Cannot find package 'vite')
+      # Capacitor Android
+      - name: Add Android platform + sync Capacitor
+        working-directory: ${{ steps.dir.outputs.dir }}
         shell: bash
         run: |
           set -e
-          npm i -D vite
-
-          # Install common Vite plugins only if config references them
-          CFG=""
-          [ -f vite.config.ts ] && CFG="vite.config.ts"
-          [ -f vite.config.js ] && CFG="vite.config.js"
-          [ -f vite.config.mjs ] && CFG="vite.config.mjs"
-
-          if [ -n "$CFG" ]; then
-            grep -q "@vitejs/plugin-react" "$CFG" && npm i -D @vitejs/plugin-react || true
-            grep -q "@vitejs/plugin-vue" "$CFG" && npm i -D @vitejs/plugin-vue || true
-            grep -q "@sveltejs/vite-plugin-svelte" "$CFG" && npm i -D @sveltejs/vite-plugin-svelte || true
-          fi
-
-      - name: Build web (works even if build script missing)
-        shell: bash
-        run: |
-          set -e
-          npm run build --if-present || npx --no-install vite build
-
-      - name: Ensure android platform + Sync Capacitor
-        shell: bash
-        run: |
-          set -e
-          if [ ! -d "android" ]; then
-            npx cap add android
-          fi
+          npx cap add android || true
           npx cap sync android
 
-      - name: Build DEBUG APK
+      # Build APK Debug (installable)
+      - name: Build DEBUG APK (installable)
+        working-directory: ${{ steps.dir.outputs.dir }}/android
         shell: bash
         run: |
           set -e
-          cd android
           chmod +x gradlew
           ./gradlew assembleDebug
 
+      # Upload as workflow artifact
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ steps.dir.outputs.dir }}/android/app/build/outputs/apk/debug/app-debug.apk
 
-      - name: Create GitHub Release + attach APK (direct download link)
+      # Create a Release automatically (عشان تنزل من Releases مباشرة)
+      - name: Create GitHub Release + upload APK
         uses: softprops/action-gh-release@v2
         with:
           tag_name: apk-${{ github.run_number }}
-          name: APK Build #${{ github.run_number }}
-          files: android/app/build/outputs/apk/debug/app-debug.apk
-          body: |
-            Download the APK from this release asset:
-            app-debug.apk
+          name: "APK build #${{ github.run_number }}"
+          prerelease: true
+          files: ${{ steps.dir.outputs.dir }}/android/app/build/outputs/apk/debug/app-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
