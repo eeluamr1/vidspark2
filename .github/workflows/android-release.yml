@@ -3,6 +3,9 @@ name: Build APK (Phone-only installable)
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
@@ -11,7 +14,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node 18
         uses: actions/setup-node@v4
         with:
           node-version: "18"
@@ -25,26 +28,41 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install deps
+      - name: Install deps (works with or without lockfile)
         shell: bash
         run: |
           set -e
-          npm install
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
 
-      - name: Ensure Vite installed (fix ERR_MODULE_NOT_FOUND)
+      - name: Ensure Vite exists (fix: Cannot find package 'vite')
         shell: bash
         run: |
           set -e
-          node -e "require.resolve('vite')" >/dev/null 2>&1 || npm i -D vite
+          npm i -D vite
 
-      - name: Build web (Vite)
+          # Install common Vite plugins only if config references them
+          CFG=""
+          [ -f vite.config.ts ] && CFG="vite.config.ts"
+          [ -f vite.config.js ] && CFG="vite.config.js"
+          [ -f vite.config.mjs ] && CFG="vite.config.mjs"
+
+          if [ -n "$CFG" ]; then
+            grep -q "@vitejs/plugin-react" "$CFG" && npm i -D @vitejs/plugin-react || true
+            grep -q "@vitejs/plugin-vue" "$CFG" && npm i -D @vitejs/plugin-vue || true
+            grep -q "@sveltejs/vite-plugin-svelte" "$CFG" && npm i -D @sveltejs/vite-plugin-svelte || true
+          fi
+
+      - name: Build web (works even if build script missing)
         shell: bash
         run: |
           set -e
-          # لو عندك build script هيشتغل، لو مش موجود هيشغل vite build مباشرة
-          npm run build --if-present || npx vite build
+          npm run build --if-present || npx --no-install vite build
 
-      - name: Add Android platform (if missing) + Sync Capacitor
+      - name: Ensure android platform + Sync Capacitor
         shell: bash
         run: |
           set -e
@@ -53,7 +71,7 @@ jobs:
           fi
           npx cap sync android
 
-      - name: Build DEBUG APK (installable)
+      - name: Build DEBUG APK
         shell: bash
         run: |
           set -e
@@ -66,3 +84,13 @@ jobs:
         with:
           name: app-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Create GitHub Release + attach APK (direct download link)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.run_number }}
+          name: APK Build #${{ github.run_number }}
+          files: android/app/build/outputs/apk/debug/app-debug.apk
+          body: |
+            Download the APK from this release asset:
+            app-debug.apk
