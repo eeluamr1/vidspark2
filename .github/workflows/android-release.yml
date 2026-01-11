@@ -15,7 +15,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "18"
-          cache: "npm"
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -27,51 +26,109 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install deps + build web
+        shell: bash
         run: |
-          npm ci
+          set -e
+          if [ -d "frontend" ] && [ -f "frontend/package.json" ]; then
+            cd frontend
+          fi
+
+          npm install
 
           # Optional: set API base from GitHub Secrets (VITE_API_BASE)
           if [ -n "${{ secrets.VITE_API_BASE }}" ]; then
             echo "VITE_API_BASE=${{ secrets.VITE_API_BASE }}" > .env
           else
+            # Default (لو بتجرب محلياً/بدون سيكرت)
             echo "VITE_API_BASE=http://127.0.0.1:4000" > .env
           fi
 
           npm run build
 
       - name: Add Android platform + sync Capacitor
+        shell: bash
         run: |
+          set -e
+          if [ -d "frontend" ] && [ -f "frontend/package.json" ]; then
+            cd frontend
+          fi
+
           npx cap add android || true
           npx cap sync android
 
       - name: Allow HTTP (cleartext) for local API
+        shell: bash
         run: |
+          set -e
+
+          MANIFEST=""
+          if [ -f "frontend/android/app/src/main/AndroidManifest.xml" ]; then
+            MANIFEST="frontend/android/app/src/main/AndroidManifest.xml"
+          elif [ -f "android/app/src/main/AndroidManifest.xml" ]; then
+            MANIFEST="android/app/src/main/AndroidManifest.xml"
+          else
+            echo "AndroidManifest.xml not found!"
+            exit 1
+          fi
+
           python3 - << 'PY'
           from pathlib import Path
           import re
+          import os
 
-          p = Path("android/app/src/main/AndroidManifest.xml")
+          manifest_path = os.environ.get("MANIFEST")
+          p = Path(manifest_path)
+
           t = p.read_text(encoding="utf-8")
 
-          if "android:usesCleartextTraffic" not in t:
-              def repl(m):
-                  tag = m.group(0)
-                  if tag.endswith("/>"):
-                      return tag[:-2] + ' android:usesCleartextTraffic="true"/>'
-                  return tag + ' android:usesCleartextTraffic="true"'
+          if 'android:usesCleartextTraffic' not in t:
+            def repl(m):
+              tag = m.group(0)
+              if tag.endswith("/>"):
+                return tag[:-2] + ' android:usesCleartextTraffic="true"/>'
+              return tag[:-1] + ' android:usesCleartextTraffic="true">'
 
-              t = re.sub(r"<application\\b[^>]*>", repl, t, count=1)
-              p.write_text(t, encoding="utf-8")
+            t2 = re.sub(r"<application\b[^>]*>", repl, t, count=1)
+            p.write_text(t2, encoding="utf-8")
           PY
+        env:
+          MANIFEST: ${{ env.MANIFEST }}
 
       - name: Build DEBUG APK (installable)
-        working-directory: android
+        shell: bash
         run: |
+          set -e
+
+          ANDROID_DIR=""
+          if [ -d "frontend/android" ] && [ -f "frontend/android/gradlew" ]; then
+            ANDROID_DIR="frontend/android"
+          elif [ -d "android" ] && [ -f "android/gradlew" ]; then
+            ANDROID_DIR="android"
+          else
+            echo "Android folder/gradlew not found!"
+            ls -la
+            exit 1
+          fi
+
+          cd "$ANDROID_DIR"
           chmod +x ./gradlew
           ./gradlew assembleDebug
+
+      - name: Find APK
+        shell: bash
+        run: |
+          set -e
+          APK=$(find . -type f -path "*/android/app/build/outputs/apk/debug/*.apk" -o -path "*/frontend/android/app/build/outputs/apk/debug/*.apk" | head -n 1)
+          if [ -z "$APK" ]; then
+            echo "APK not found!"
+            find . -maxdepth 6 -type f | head -n 200
+            exit 1
+          fi
+          echo "APK_PATH=$APK" >> $GITHUB_ENV
+          echo "Found APK: $APK"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: VidSpark-app-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          path: ${{ env.APK_PATH }}
