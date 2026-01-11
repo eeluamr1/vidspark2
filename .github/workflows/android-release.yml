@@ -11,7 +11,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # مهم: شيلنا cache عشان مايقفش بسبب package-lock.json
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -40,15 +39,11 @@ jobs:
         working-directory: ${{ steps.appdir.outputs.dir }}
         shell: bash
         run: |
-          set -e
           npm install
 
           # Optional: set API base from GitHub Secrets (VITE_API_BASE)
           if [ -n "${{ secrets.VITE_API_BASE }}" ]; then
             echo "VITE_API_BASE=${{ secrets.VITE_API_BASE }}" > .env
-          else
-            # Default (غيره حسب API عندك)
-            echo "VITE_API_BASE=http://127.0.0.1:4000" > .env
           fi
 
           npm run build
@@ -57,46 +52,44 @@ jobs:
         working-directory: ${{ steps.appdir.outputs.dir }}
         shell: bash
         run: |
-          set -e
           npx cap add android || true
           npx cap sync android
 
       - name: Allow HTTP (cleartext) for local API
         shell: bash
         run: |
-          python3 - << 'PY'
+          python3 - <<'PY'
           from pathlib import Path
           import re
 
-          appdir = "${{ steps.appdir.outputs.dir }}"
-          manifest = Path(appdir) / "android/app/src/main/AndroidManifest.xml"
+          base = Path("${{ steps.appdir.outputs.dir }}")
+          mf = base / "android/app/src/main/AndroidManifest.xml"
 
-          if not manifest.exists():
-              raise SystemExit(f"AndroidManifest not found: {manifest}")
+          if not mf.exists():
+              print("AndroidManifest not found:", mf)
+              raise SystemExit(1)
 
-          t = manifest.read_text(encoding="utf-8")
+          t = mf.read_text(encoding="utf-8")
 
           if "android:usesCleartextTraffic" not in t:
-              # add attribute into <application ...>
               def repl(m):
                   tag = m.group(0)
                   if tag.endswith("/>"):
                       return tag[:-2] + ' android:usesCleartextTraffic="true" />'
                   return tag[:-1] + ' android:usesCleartextTraffic="true">'
-              t2 = re.sub(r"<application\b[^>]*>", repl, t, count=1)
-              manifest.write_text(t2, encoding="utf-8")
+              t = re.sub(r"<application\b[^>]*>", repl, t, count=1)
+              mf.write_text(t, encoding="utf-8")
           PY
 
       - name: Build DEBUG APK (installable)
+        working-directory: ${{ steps.appdir.outputs.dir }}/android
         shell: bash
         run: |
-          set -e
-          cd "${{ steps.appdir.outputs.dir }}/android"
           chmod +x ./gradlew
           ./gradlew assembleDebug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: VidSpark-app-debug-apk
+          name: vidpark-debug-apk
           path: ${{ steps.appdir.outputs.dir }}/android/app/build/outputs/apk/debug/*.apk
